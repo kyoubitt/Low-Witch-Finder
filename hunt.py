@@ -38,7 +38,7 @@ import threading
 import time
 import traceback
 
-ROOT = os.path.dirname(os.path.realpath(__file__))
+ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.realpath(__file__))   # the .exe keeps its tools beside it
 sys.path.insert(0, ROOT)
 import mcfiles  # noqa: E402
 import witchhut_common as W  # noqa: E402
@@ -749,7 +749,9 @@ class Run:
         atomic_write(self.f("settings.json"), json.dumps(self.settings()))
         log = open(self.f("driver.log"), "a", encoding="utf-8")
         kw = dict(creationflags=0x00000008 | 0x00000200 | NO_WINDOW) if os.name == "nt" else dict(start_new_session=True)
-        subprocess.Popen([sys.executable, "-I", os.path.join(ROOT, "hunt.py"), "run", "--tag", self.tag],
+        cmd = [sys.executable, "--hunt", "run", "--tag", self.tag] if getattr(sys, "frozen", False) \
+            else [sys.executable, "-I", os.path.join(ROOT, "hunt.py"), "run", "--tag", self.tag]      # the .exe runs itself as the driver
+        subprocess.Popen(cmd,
                          stdin=subprocess.DEVNULL, stdout=log, stderr=log, cwd=ROOT, **kw)
 
     def stop(self, now=False):

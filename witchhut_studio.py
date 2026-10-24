@@ -32,7 +32,7 @@ import threading
 import time
 import types
 
-ROOT = os.path.dirname(os.path.realpath(__file__))
+ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.realpath(__file__))   # the .exe keeps its tools beside it
 sys.path.insert(0, ROOT)
 import tui_core as T                                                   # noqa: E402
 from tui_core import CLEAR, PIC_IDS, Picture, Screen, Term, mix, parse_input, twidth, wrap   # noqa: E402
@@ -40,7 +40,7 @@ import witchhut_common as W                                            # noqa: E
 import hunt                                                            # noqa: E402
 import mcfiles                                                         # noqa: E402
 
-NAME = "WitchHut"        # working title; one place to rename
+NAME = "Low Witch Finder"        # one place to rename
 
 # ---- colours: a swamp. Moss and mud for the page, a witch-purple accent, a lit-up lime for the swamp itself -----------
 THEMES = {
@@ -1981,6 +1981,8 @@ def main(argv=None):
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
+    if argv[:1] == ["--hunt"]:                       # the .exe starts a hunt by running itself this way
+        return hunt.main(argv[1:])
     if argv[:1] == ["--selftest"]:
         return selftest()
     if argv[:1] == ["--frame"]:

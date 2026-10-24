@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 
-ROOT = os.path.dirname(os.path.realpath(__file__))
+ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.realpath(__file__))   # the .exe keeps its tools beside it
 DATA = os.path.join(ROOT, "data")
 ENGINE = os.path.join(ROOT, "engine")
 EXE = ".exe" if os.name == "nt" else ""

@@ -1,9 +1,29 @@
-# WitchHut Studio (working title)
+<p align="center"><img src="assets/logo.png" width="420" alt="Low Witch Finder"></p>
+
+# Low Witch Finder
 
 A full-screen terminal app for Minecraft witch huts: a biome map of any seed, and a finder for huts whose floor is very low (y -50 to -59).
-Python 3.8+ only, no installs. Linux and Windows.
+Python 3.8+ only, no installs. Linux, Windows and macOS.
 
-    python3 witchhut_studio.py        (Windows: python witchhut_studio.py)
+
+## Install
+
+**Linux and macOS** (needs git, python3 and a C compiler; builds the tools in a minute or two, no sudo):
+
+    curl -fsSL https://raw.githubusercontent.com/kyoubitt/Low-Witch-Finder/master/install.sh | bash
+
+Then run `low-witch-finder`. On macOS with Homebrew you can use the tap instead:
+
+    brew install kyoubitt/low-witch-finder/low-witch-finder
+
+**Windows** (PowerShell; a ready-made `.exe`, no Python needed, no admin):
+
+    irm https://raw.githubusercontent.com/kyoubitt/Low-Witch-Finder/master/install.ps1 | iex
+
+Then open it from the Start menu, or type `LowWitchFinder` in a terminal. Or take `LowWitchFinder-windows.zip` from the
+[latest release](https://github.com/kyoubitt/Low-Witch-Finder/releases/latest) and run `LowWitchFinder.exe`.
+
+Run the same command again to update. From a clone: `python3 witchhut_studio.py` (Windows: `python witchhut_studio.py`).
 
 ## Map
 Any seed, 1.18 to 26.3, each version's own biome tree (the game's, dumped from its own code). **Nearest hut** (or `z`) zooms to the closest hut; `r` picks a random seed.

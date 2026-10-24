@@ -18,7 +18,7 @@ import subprocess
 import sys
 import urllib.request
 
-ROOT = os.path.dirname(os.path.realpath(__file__))
+ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.realpath(__file__))   # the .exe keeps its tools beside it
 MC_DIR = os.path.join(ROOT, "mc")
 VERSION = "1.21.4"
 MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"

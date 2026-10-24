@@ -23,7 +23,7 @@ cd "$W/out"
 nice wine ../py/python.exe -m PyInstaller --noconfirm --clean --onefile --console --name LowWitchFinder \
   --icon "Z:$(echo "$SRC/assets/icon.ico" | tr / '\\')" \
   --add-data "Z:$(echo "$W/payload.zip" | tr / '\\');." \
-  --paths "Z:$(echo "$SRC" | tr / '\\')" \
+  --paths "Z:$(echo "$SRC" | tr / '\\')" --paths "Z:$(echo "$SRC/tools" | tr / '\\')" --hidden-import export_catalog \
   "Z:$(echo "$SRC/witchhut_studio.py" | tr / '\\')" 2>&1 | tail -5
 ls -la dist/LowWitchFinder.exe
 cp dist/LowWitchFinder.exe "$SRC/dist-LowWitchFinder.exe"

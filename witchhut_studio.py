@@ -82,7 +82,7 @@ HELP = [("Everywhere", None), ("1  2", "Map, Hunt"), ("u", "size: small, medium,
         ("", None), ("Map", None), ("z", "nearest hut"), ("r", "random seed"), ("e", "type a seed"), ("drag, scroll", "pan, zoom"),
         ("k", "known low huts"), ("w", "whole world, no terrain"), ("[  ]", "game version"), ("click a hut", "select it; c copies its /tp"),
         ("", None), ("Hunt", None), ("up down, left right", "pick a setting, change it"), ("s  x", "start, stop"),
-        ("c  m", "copy / show on the map the selected hut"), ("n", "new random start (-55 and deeper)"),
+        ("c  m", "copy / show on the map the selected hut"), ("p", "share new huts when the list couldn't be updated from here"), ("n", "new random start (-55 and deeper)"),
         ("", None), ("Known huts popup", None), ("up down, left right", "move, filter by depth"), ("o", "closest or deepest first"),
         ("enter", "zoom to it"), ("esc", "close")]
 
@@ -1340,6 +1340,16 @@ class App:
         self.h_next, self.dirty = 0.0, True
         self.say("Stopping...", 3)
 
+    def share_finds(self):
+        """Open the prepared GitHub issue that shares the new huts, for when the list couldn't be updated from here."""
+        url = hunt.catalog_share_url()
+        if not url:
+            self.say("Nothing waiting to share", 3)
+            return
+        import webbrowser
+        webbrowser.open(url)
+        self.say("Opened the page that shares your new huts", 5)
+
     def hunt_new_spot(self):
         if self.h_locked():
             self.say("Stop the hunt first", 3)
@@ -1840,6 +1850,8 @@ class App:
                 self.hunt_stop()
             elif c == "n":
                 self.hunt_new_spot()
+            elif c == "p":
+                self.share_finds()
             elif c == "e":
                 self.h_edit_seeds()
             elif c == "c" and f:

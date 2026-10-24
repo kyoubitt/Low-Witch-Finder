@@ -199,7 +199,14 @@ def git(repo, *args, **kw):
     return subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True, **kw)
 
 
-def commit(repo, added, push):
+def share_url(huts):
+    """A GitHub 'new issue' link that carries the new huts, for a person who can't push to the list themselves."""
+    from urllib.parse import quote
+    body = "New -55 or deeper huts from Low Witch Finder (seed x z):\n\n" + "\n".join("%s %d %d" % (s, x, z) for s, x, z in huts[:40])
+    return "%s/issues/new?title=%s&body=%s" % (CATALOG, quote("New huts: %d" % len(huts)), quote(body))
+
+
+def commit(repo, added, push, huts=()):
     """Commit what changed in the catalog checkout as the checkout's last author, with the credit line, and push it."""
     git(repo, "add", "-A")
     if not git(repo, "status", "--porcelain").stdout.strip():
@@ -212,11 +219,16 @@ def commit(repo, added, push):
         return "commit failed: " + (r.stderr or r.stdout).strip()
     if push:
         r = git(repo, "push", "-q")
-        return "pushed" if r.returncode == 0 else "push failed: " + r.stderr.strip()
+        if r.returncode == 0:
+            return "pushed"
+        if huts:                                              # nobody but the owner can push: leave a link that shares them instead
+            with open(os.path.join(H.RUNS, "catalog_share.url"), "w", encoding="utf-8") as f:
+                f.write(share_url(list(huts)))
+        return "push failed: " + (r.stderr.strip().splitlines() or ["no access"])[-1]
     return "committed"
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("out_dir")
     ap.add_argument("--import", dest="imports", nargs="*", default=[], metavar="FILE.jsonl")
@@ -226,7 +238,7 @@ def main():
     ap.add_argument("--readme", nargs="*", default=[], metavar="FILE")
     ap.add_argument("--version-lists", metavar="DIR")
     ap.add_argument("--keep-going", action="store_true", help="carry on if the oracle can't read one batch")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     H.need("terrain_dump")
     have = existing(a.out_dir)
     cands, seen = [], set(have)
@@ -299,7 +311,8 @@ def main():
         put_block(path, short_md(len(ranked)).replace("BADGES", badges(by)))
     print("kept %d (%s), %d unconfirmed" % (len(have), ", ".join("%d: %d" % (y, len(by[y])) for y in sorted(by)), len(bad)))
     if a.commit:
-        print(commit(a.out_dir, len(cands) - len(bad), a.push))
+        new = [(s, x, z) for s, x, z, _, _ in cands if key(s, x >> 4, z >> 4) in have]
+        print(commit(a.out_dir, len(new), a.push, new))
 
 
 if __name__ == "__main__":

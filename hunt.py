@@ -1605,29 +1605,43 @@ def catalog_status():
         return when, "Sent the new huts to the public list"
     if last == "committed":
         return when, "Added the new huts to the list (not pushed)"
-    if "failed" in last:
-        return when, "The public list wasn't updated: " + last
+    if "failed" in last or last.startswith("ERROR"):
+        return when, "The public list wasn't updated: " + last.replace("ERROR: ", "") + ("  (press p to share them)" if catalog_share_url() else "")
     return None
 
 
 def sync_catalog():
-    """After a find, put the new -55 and deeper huts into the public list (a checkout of kyoubitt/low-y-witch-huts), in the background.
-    Only when a checkout is set up: WITCHHUT_CATALOG names it, else ~/src/low-y-witch-huts. Nobody else's copy pushes anywhere."""
+    """After a run, put the new -55 and deeper huts into the public list (a git checkout of kyoubitt/low-y-witch-huts), in the background.
+    The checkout is WITCHHUT_CATALOG, else ~/src/low-y-witch-huts, else (the .exe) a catalog/ folder beside its tools, cloned on first use when
+    git is there. A test's or a trial's own folders never sync. If the push is refused, the log keeps a link that shares the huts instead."""
+    frozen = getattr(sys, "frozen", False)
     repo = os.environ.get("WITCHHUT_CATALOG")
-    if not repo and not (os.environ.get("WITCHHUT_RUNS") or os.environ.get("WITCHHUT_RESULTS")):      # a test's or a trial's own folders never push
-        repo = os.path.join(os.path.expanduser("~"), "src", "low-y-witch-huts")
+    if not repo and not (os.environ.get("WITCHHUT_RUNS") or os.environ.get("WITCHHUT_RESULTS")):
+        repo = os.path.join(ROOT, "catalog") if frozen else os.path.join(os.path.expanduser("~"), "src", "low-y-witch-huts")
     if not repo:
         return
-    script = os.path.join(ROOT, "tools", "export_catalog.py")
-    if getattr(sys, "frozen", False) or not os.path.isdir(os.path.join(repo, ".git")) or not os.path.isfile(script):
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        if not (frozen and shutil.which("git")):
+            return
+        if subprocess.run(["git", "clone", "-q", "https://github.com/kyoubitt/low-y-witch-huts", repo], capture_output=True,
+                          creationflags=NO_WINDOW).returncode:
+            return
+    if not frozen and not os.path.isfile(os.path.join(ROOT, "tools", "export_catalog.py")):
         return
+    cmd = [sys.executable, "--hunt", "sync", repo] if frozen else [sys.executable, "-I", os.path.join(ROOT, "hunt.py"), "sync", repo]
+    kw = dict(creationflags=0x00000008 | 0x00000200 | NO_WINDOW) if os.name == "nt" else dict(start_new_session=True)
     try:
         os.makedirs(RUNS, exist_ok=True)
-        subprocess.Popen([sys.executable, "-I", script, repo, "--commit", "--push"],
-                         stdin=subprocess.DEVNULL, stdout=open(os.path.join(RUNS, "catalog.log"), "a"), stderr=subprocess.STDOUT,
-                         cwd=ROOT, start_new_session=True)
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=open(os.path.join(RUNS, "catalog.log"), "a"), stderr=subprocess.STDOUT, cwd=ROOT, **kw)
     except OSError:
         pass
+
+
+def catalog_share_url():
+    try:
+        return open(os.path.join(RUNS, "catalog_share.url"), encoding="utf-8").read().strip() or None
+    except OSError:
+        return None
 
 
 # ---- opening runs ----------------------------------------------------------------------------------------------------------------
@@ -1755,7 +1769,7 @@ def selftest(cpu_only=False, say=print):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hunt.py", description="the low-Y witch hut finder")
-    ap.add_argument("cmd", choices=["run", "stop", "status", "preflight", "selftest", "scan", "tune"])
+    ap.add_argument("cmd", choices=["run", "stop", "status", "preflight", "selftest", "scan", "tune", "sync"])
     ap.add_argument("arg", nargs="?", default="")
     ap.add_argument("--tag", default="")
     ap.add_argument("--level", type=int, default=-58)
@@ -1764,6 +1778,10 @@ def main(argv=None):
     ap.add_argument("--area", type=int, default=0)
     a = ap.parse_args(argv)
     try:
+        if a.cmd == "sync":                                   # put new -55 and deeper huts into the public list (arg: the catalog folder)
+            import export_catalog
+            export_catalog.main([a.arg, "--commit", "--push"])
+            return 0
         if a.cmd == "selftest":
             if a.arg == "scan":
                 return 0 if selftest_scan() else 1

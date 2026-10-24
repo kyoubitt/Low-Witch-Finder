@@ -61,13 +61,28 @@ check("a second sync with nothing new adds no commit", n == "2", n)
 
 # the sync runs for any run that ends, and says so
 ran = []
+_popen = H.subprocess.Popen
 H.subprocess.Popen = lambda cmd, **kw: ran.append(cmd)
 os.environ.pop("WITCHHUT_CATALOG", None)
 H.sync_catalog()
 check("a run with its own folders never syncs to the default checkout", not ran, ran)
 os.environ["WITCHHUT_CATALOG"] = repo
 H.sync_catalog()
-check("a stopped run still starts the sync", len(ran) == 1 and "--commit" in ran[0] and "--push" in ran[0], ran)
+check("a stopped run still starts the sync", len(ran) == 1 and ran[0][-2:] == ["sync", repo], ran)
+ran.clear()
+H.sys.frozen = True                                         # the .exe runs itself
+H.sync_catalog()
+check("the .exe syncs by running itself", len(ran) == 1 and ran[0] == [sys.executable, "--hunt", "sync", repo], ran)
+del H.sys.frozen
+H.subprocess.Popen = _popen
+# a push that is refused leaves a link that shares the huts instead
+os.makedirs(H.RUNS, exist_ok=True)
+open(repo + "/data/extra.txt", "w").write("x")
+msg = E.commit(repo, 1, True, [("111", 16000, 32000)])
+url = H.catalog_share_url() or ""
+check("a refused push leaves a share link", msg.startswith("push failed") and "issues/new" in url and "111%2016000%2032000" in url, (msg, url))
+open(H.RUNS + "/catalog.log", "w").write("push failed: no access\n")
+check("the Hunt tab offers the share key", "press p" in H.catalog_status()[1], H.catalog_status())
 os.makedirs(H.RUNS, exist_ok=True)
 open(H.RUNS + "/catalog.log", "w").write("kept 2\npushed\n")
 check("the Hunt tab can tell the person", H.catalog_status()[1].startswith("Sent the new huts"))

@@ -1,0 +1,24 @@
+How the -54 search works
+
+1. GPU stage (src/phase1_scan.cu). For one seed it walks every swamp-hut region of the +-30M world (117,189 x 117,189 = 1.373e10 regions) and applies the cheap, strongly rejecting gates first: erosion, temperature, ridge (eight Perlin evaluations per region, the cost that dominates), then continentalness and the cave-entrance tests, then the terrain-shaper density prefilter. About 500 to 700 regions per seed survive at the -50 floor. Output: seed,chunkX,chunkZ,blockX,blockZ,gpuEst per candidate.
+2. Exact stage (tools/lysh, `lysh hut`). For each candidate it builds the real footprint heights, checks the swamp biome and that the footprint is not flooded, and prints the average (the hut y). scan54.sh keeps the ones at or below -DEPTH.
+
+The GPU stage is a superset filter: it never has to be exact, it only must never lose a real hut. That is why the FP32 interpolation core is allowed (extra candidates are harmless, a missing one is not; docs/FP32_NOISE_CORE.txt) and why the height gate is -50 even when you want -54 (lysh treats -50 to -54 as -50 in its own first stage).
+
+Seeds: hunt54.sh uses seed = index * 6364136223846793005 (mod 2^64). Consecutive indices land all over the key space; the index is the resume checkpoint (runs54/progress.txt).
+
+Measured in this folder (laptop-class Ada GPU, 20 SMs, 6 GB; one seed, whole world, FLOOR -50)
+
+    GPU stage                 58.4 s    235 million region checks per second
+    lysh confirmation         27 s      698 candidates, 8 parallel lysh processes (mostly process start-up cost)
+    scan54.sh, whole seed     85 s
+
+For comparison, docs/OPTIMIZATION_NOTES.txt records about 9.7 s per seed for the optimised scanner on a 188-SM workstation GPU, and the earlier whole-seed hunt reached 36 to 43 s per seed with the GPU of seed N+1 overlapping the CPU work of seed N. hunt54.sh does not overlap them; running two copies on different index ranges, or adding that overlap, is the obvious next step.
+
+Examples from this folder
+    seed 1473884015873122059   /tp -15792 -54 -17168     (698 candidates, 1 confirmed; matches the full CPU scan)
+    seed 1291329195661654798   /tp 2137600 -54 26493184  (hunt54.sh index 6: 466 candidates, 1 confirmed)
+
+Why not just lysh? `lysh scan` does the same job on the CPU in about 12 minutes per seed with 5 threads. The GPU stage turns that into about a minute on a laptop GPU and about ten seconds on a big one.
+
+Memory: the scanner allocates its per-seed noise caches for a batch of up to 65,000 seeds. allocateBuffers() lowers that to what the free GPU memory can hold (it was a hard failure on a 6 GB card before), so a single seed per call is cheap everywhere.

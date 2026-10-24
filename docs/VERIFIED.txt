@@ -1,0 +1,15 @@
+What was checked on this exact folder (2026-10-16)
+
+Built from the files in this folder on a laptop-class Ada GPU (compute 8.9, 20 SMs, 6 GB), Windows, Git Bash, CUDA toolkit 13.x, Visual Studio 2026 build tools.
+
+    build.bat                    bin\phase1_scan.exe, exit 0 (about 11 minutes; the first attempt failed because md5.h was missing from
+                                 the share, now added)
+    cmake -S tools/lysh ...      lysh.exe builds from the shipped source
+    scan54.sh 1473884015873122059
+                                 698 candidates, 1 confirmed: /tp -15792 -54 -17168, the same hut a full CPU lysh scan of that seed finds
+    hunt54.sh 5, then resume     runs index 5 (555 candidates, 0 confirmed), resumes at index 6 from progress.txt
+    STOP_ON_FIND=1 hunt54.sh 6   index 6 = seed 1291329195661654798: 466 candidates, 1 confirmed: /tp 2137600 -54 26493184, written to results.txt
+
+Fixed while testing: the scanner ran out of GPU memory on a 6 GB card (buffers were sized for 65,000 seeds per batch); hunt54.sh missed confirmed huts because of a leading-space mismatch in its output matching.
+
+Not checked here: the in-game height of the two huts above; the FP64 reference build (build.bat ref) and the FP32-versus-FP64 comparison described in docs/FP32_NOISE_CORE.txt (that was done in the original project, not repeated here); the sm_120 (Blackwell) code path; Linux; a long hunt.

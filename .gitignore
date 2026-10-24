@@ -1,0 +1,12 @@
+# built here, per machine
+bin/*
+!bin/*.exe
+build/
+# Mojang's files, downloaded by the app
+mc/
+# a hunt's working files and what it found
+runs/
+results/
+__pycache__/
+*.part
+logs/

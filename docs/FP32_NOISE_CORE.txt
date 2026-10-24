@@ -1,0 +1,9 @@
+Phase 1 Perlin interpolation in FP32
+
+The phase-1 scan was FP64-throughput bound. The workstation GPU these numbers come from does FP64 at 1/67th of FP32 (measured: 1.47 vs 98.71 TFLOP/s), which is why it sat at 100% "utilisation" while drawing only 177 W of a 600 W budget: the FP64 units are a thin slice of the die, and saturating them pegs the counter while the rest of the chip idles. Low power at 100% utilisation is the tell for FP64-bound, not for "memory bound". (Consumer GPUs have the same 1/64 FP64 ratio.)
+
+PHASE1_FP32_CORE in device_noise.h moves the Perlin interpolation core (8 gradient dots, 3 fades, 7 lerps, all on values in [-2, 2]) to float: 30 s -> 12 s per full-world seed, 2.5x.
+
+What must never move to float: x2/y2/z2, their floors, and the subtraction producing fx/fy/fz. pn_maintainPrecision folds coordinates into +-2^25, where a float's ULP is 2.0, so x2 - floor(x2) would round to a constant and every lattice position would collapse.
+
+Validation rule after ANY noise-path change: build both variants (build.bat ref gives phase1_scan.exe and phase1_scan_fp64.exe) and diff their candidate CSVs across far-corner coordinates (20-30M blocks), a threshold sweep, near-origin and full world. A candidate present in the FP64 output but missing from the FP32 output is a silent false negative and is fatal; extra candidates are harmless because phase 2 re-verifies exactly. The original validation found zero differences over about 7,950 candidates. Size the test region properly: a region too small returns 0 candidates and proves nothing. GPU emission order varies from run to run, so always compare sorted.

@@ -833,8 +833,7 @@ class Run:
                 fh.write(failed)
             print("driver aborted:", failed, flush=True)
             return 1
-        if outcome == "found":
-            sync_catalog()
+        sync_catalog()                                    # a stopped run may have found something too; the script skips what is already listed
         print("driver finished:", outcome, flush=True)
         return 0
 
@@ -1593,15 +1592,38 @@ class ScanRun(Run):
                     failed=(self.lines("FAILED") or [None])[0], live=live, outcome=live.get("phase") if not running else None)
 
 
+def catalog_status():
+    """(when, text) of the last catalog sync worth telling the person about, or None."""
+    path = os.path.join(RUNS, "catalog.log")
+    try:
+        lines = [l.strip() for l in open(path, encoding="utf-8") if l.strip()]
+        when = os.path.getmtime(path)
+    except OSError:
+        return None
+    last = lines[-1] if lines else ""
+    if last == "pushed":
+        return when, "Sent the new huts to the public list"
+    if last == "committed":
+        return when, "Added the new huts to the list (not pushed)"
+    if "failed" in last:
+        return when, "The public list wasn't updated: " + last
+    return None
+
+
 def sync_catalog():
     """After a find, put the new -55 and deeper huts into the public list (a checkout of kyoubitt/low-y-witch-huts), in the background.
     Only when a checkout is set up: WITCHHUT_CATALOG names it, else ~/src/low-y-witch-huts. Nobody else's copy pushes anywhere."""
-    repo = os.environ.get("WITCHHUT_CATALOG") or os.path.join(os.path.expanduser("~"), "src", "low-y-witch-huts")
+    repo = os.environ.get("WITCHHUT_CATALOG")
+    if not repo and not (os.environ.get("WITCHHUT_RUNS") or os.environ.get("WITCHHUT_RESULTS")):      # a test's or a trial's own folders never push
+        repo = os.path.join(os.path.expanduser("~"), "src", "low-y-witch-huts")
+    if not repo:
+        return
     script = os.path.join(ROOT, "tools", "export_catalog.py")
     if getattr(sys, "frozen", False) or not os.path.isdir(os.path.join(repo, ".git")) or not os.path.isfile(script):
         return
     try:
-        subprocess.Popen([sys.executable, "-I", script, repo, "--commit", "--push", "--readme", os.path.join(ROOT, "README.md")],
+        os.makedirs(RUNS, exist_ok=True)
+        subprocess.Popen([sys.executable, "-I", script, repo, "--commit", "--push"],
                          stdin=subprocess.DEVNULL, stdout=open(os.path.join(RUNS, "catalog.log"), "a"), stderr=subprocess.STDOUT,
                          cwd=ROOT, start_new_session=True)
     except OSError:

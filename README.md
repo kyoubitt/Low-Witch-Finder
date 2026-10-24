@@ -28,15 +28,9 @@ Run the same command again to update. From a clone: `python3 witchhut_studio.py`
 
 ## Huts found so far
 <!-- huts:start -->
-| Depth | Huts | Closest to 0,0 |
-|---:|---:|---|
-| -59 | 29 | `/tp 10775571 -57 -1979225` (seed `2331238980023747641`) |
-| -58 | 208 | `/tp 5811 -56 4423` (seed `795374283637013279`) |
-| -57 | 221 | `/tp 11451648 -55 2183904` (seed `-1017935249147774789`) |
-| -56 | 95 | `/tp 9740096 -54 1107104` (seed `-4740240012570737231`) |
-| -55 | 90 | `/tp 14663264 -53 -462528` (seed `366669180963114071`) |
+![huts](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkyoubitt%2Flow-y-witch-huts%2Fmain%2Fdata%2Fsummary.json&query=%24.total&label=huts&color=2ea44f&style=flat-square) ![y -59](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkyoubitt%2Flow-y-witch-huts%2Fmain%2Fdata%2Fsummary.json&query=%24.y59&label=y%20-59&color=e0457b&style=flat-square) ![y -58](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkyoubitt%2Flow-y-witch-huts%2Fmain%2Fdata%2Fsummary.json&query=%24.y58&label=y%20-58&color=f0883e&style=flat-square) ![updated](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkyoubitt%2Flow-y-witch-huts%2Fmain%2Fdata%2Fsummary.json&query=%24.updated&label=updated&color=6e7781&style=flat-square)
 
-**643 huts** at -55 or deeper, each re-read by Minecraft 1.21.4's own world generation: [all of them](https://github.com/kyoubitt/low-y-witch-huts).
+Every -55 or deeper hut found, each re-read by the game's own code: [the list](https://github.com/kyoubitt/low-y-witch-huts), [the ranking](https://github.com/kyoubitt/low-y-witch-huts/blob/main/RANKING.md).
 <!-- huts:end -->
 
 ## Map

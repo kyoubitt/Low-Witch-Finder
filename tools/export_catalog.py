@@ -10,18 +10,23 @@ or deeper are written, at the depth the oracle read, so a wrong claim never gets
 What is already in OUT_DIR is kept and not asked again. Needs the Minecraft files (mcfiles.py) and Java 21.
 
   --commit [--push]   also commit what changed in OUT_DIR (a git checkout of the catalog repo) and push it
-  --readme FILE ...   refresh the counts table between <!-- huts:start --> and <!-- huts:end --> in these files too
-                      (OUT_DIR/README.md always; the finder's own README.md when it has the markers)
+  --readme FILE ...   refresh the short block (live badges and a link) between <!-- huts:start --> and <!-- huts:end --> in these files too;
+                      OUT_DIR/README.md always gets the full block (badges, depth table, top 10), plus RANKING.md and data/ranked.tsv
+  --version-lists DIR set each hut's "versions" from lists DIR/<version group>/y-NN.jsonl (lines with seed, x, z)
+
+The ranking is the order the finder itself uses: deepest first, then closest to 0,0.
 
 The hunt driver runs this by itself after a run that found something, when a catalog checkout is set up (hunt.sync_catalog)."""
 import argparse
 import glob
 import json
+import math
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
 import hunt as H  # noqa: E402
@@ -88,14 +93,90 @@ CATALOG = "https://github.com/kyoubitt/low-y-witch-huts"
 CREDIT = "Co-authored-by: xvyz1 <155855346+xvyz1@users.noreply.github.com>"
 
 
-def table_md(by):
-    """The counts table, with the hut closest to 0,0 at each depth."""
-    rows = ["| Depth | Huts | Closest to 0,0 |", "|---:|---:|---|"]
+RAW = "https://raw.githubusercontent.com/kyoubitt/low-y-witch-huts/main/data/summary.json"
+DEPTH_COLOUR = {-59: "e0457b", -58: "f0883e", -57: "d4a72c", -56: "8cb34a", -55: "4c9f70"}
+
+
+def rank_huts(by):
+    """Every hut once, ranked: deepest first, then closest to 0,0, then seed. Adds rank and dist (blocks from 0,0)."""
+    rows = [dict(d, dist=int(math.hypot(d["x"], d["z"]))) for v in by.values() for d in v]
+    rows.sort(key=lambda d: (d["y"], d["dist"], d["seed"]))
+    for i, d in enumerate(rows, 1):
+        d["rank"] = i
+    return rows
+
+
+def short_dist(n):
+    return "%d" % n if n < 100_000 else "%.1fM" % (n / 1e6) if n >= 1_000_000 else "%dk" % (n / 1000)
+
+
+def badge(label, query, colour):
+    return "![%s](https://img.shields.io/badge/dynamic/json?url=%s&query=%s&label=%s&color=%s&style=flat-square)" % (
+        label, RAW.replace(":", "%3A").replace("/", "%2F"), query, label.replace(" ", "%20"), colour)
+
+
+def badges(by):
+    return " ".join([badge("huts", "%24.total", "2ea44f"), badge("y -59", "%24.y59", DEPTH_COLOUR[-59]),
+                     badge("y -58", "%24.y58", DEPTH_COLOUR[-58]), badge("updated", "%24.updated", "6e7781")])
+
+
+def vers(d, groups):
+    v = d.get("versions") or []
+    return "%d/%d" % (len(v), groups) if groups else ""
+
+
+def depth_table(by):
+    top = max(len(v) for v in by.values())
+    rows = ["| Depth | Huts | | Closest to 0,0 |", "|---:|---:|:---|---|"]
     for y in sorted(by):
         c = min(by[y], key=lambda d: abs(d["x"]) + abs(d["z"]))
-        rows.append("| %d | %d | `/tp %d %d %d` (seed `%s`) |" % (y, len(by[y]), c["x"], y + 2, c["z"], c["seed"]))
-    n = sum(len(v) for v in by.values())
-    return "\n".join(rows) + "\n\n**%d huts** at -55 or deeper, each re-read by Minecraft 1.21.4's own world generation: [all of them](%s).\n" % (n, CATALOG)
+        rows.append("| **%d** | %d | `%s` | `/tp %d %d %d` |" % (y, len(by[y]), "\u2588" * max(1, round(12 * len(by[y]) / top)), c["x"], y + 2, c["z"]))
+    return "\n".join(rows)
+
+
+def top_table(ranked, groups, n=10):
+    rows = ["| # | Depth | Teleport | From 0,0 | Seed |", "|---:|---:|---|---:|---|"]
+    for d in ranked[:n]:
+        rows.append("| %d | **%d** | `/tp %d %d %d` | %s | `%s` |" % (d["rank"], d["y"], d["x"], d["y"] + 2, d["z"], short_dist(d["dist"]), d["seed"]))
+    return "\n".join(rows)
+
+
+def table_md(by, ranked, groups):
+    """The README block of the catalog: live badges, the depth table, the ten best."""
+    return "%s\n\n%s\n\n### Top 10\nDeepest first, then closest to 0,0. [The full ranking](RANKING.md) lists all %d.\n\n%s\n" % (
+        badges(by), depth_table(by), len(ranked), top_table(ranked, groups))
+
+
+def short_md(n):
+    """What the finder's README shows: the badges (they read the catalog live, so this never goes stale) and the links."""
+    return "%s\n\nEvery -55 or deeper hut found, each re-read by the game's own code: [the list](%s), [the ranking](%s/blob/main/RANKING.md).\n" % (
+        "BADGES", CATALOG, CATALOG)
+
+
+def ranking_md(ranked, groups):
+    rows = ["# Ranking", "", "Deepest first, then closest to 0,0. %d huts. `Versions` is how many of the %d tracked version groups give the same depth." % (len(ranked), groups),
+            "", "| # | Depth | Teleport | From 0,0 | Seed | Versions | Source |", "|---:|---:|---|---:|---|---:|---|"]
+    for d in ranked:
+        rows.append("| %d | **%d** | `/tp %d %d %d` | %s | `%s` | %s | %s |" % (d["rank"], d["y"], d["x"], d["y"] + 2, d["z"], short_dist(d["dist"]),
+                                                                              d["seed"], vers(d, groups), d["source"]))
+    return "\n".join(rows) + "\n"
+
+
+def version_lists(root):
+    """{key: [version group, ...]} from root/<group>/y-NN.jsonl, and the number of groups."""
+    out, groups = {}, []
+    for g in sorted(os.listdir(root)):
+        files = glob.glob(os.path.join(root, g, "y-*.jsonl"))
+        if not files:
+            continue
+        groups.append(g)
+        for p in files:
+            with open(p, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        d = json.loads(line)
+                        out.setdefault(key(str(d["seed"]), int(d["x"]) >> 4, int(d["z"]) >> 4), []).append(g)
+    return out, len(groups)
 
 
 def put_block(path, text):
@@ -125,7 +206,7 @@ def commit(repo, added, push):
         return "nothing new to commit"
     who = git(repo, "log", "-1", "--format=%an%n%ae").stdout.split("\n")
     ident = ["-c", "user.name=" + who[0], "-c", "user.email=" + who[1]] if len(who) >= 2 and who[0] else []
-    msg = "Add %d hut%s found by Low Witch Finder\n\n%s\n" % (added, "" if added == 1 else "s", CREDIT)
+    msg = ("Add %d hut%s found by Low Witch Finder" % (added, "" if added == 1 else "s") if added > 0 else "Update the list") + "\n\n%s\n" % CREDIT
     r = subprocess.run(["git", "-C", repo] + ident + ["commit", "-q", "-m", msg], capture_output=True, text=True)
     if r.returncode:
         return "commit failed: " + (r.stderr or r.stdout).strip()
@@ -143,6 +224,7 @@ def main():
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--readme", nargs="*", default=[], metavar="FILE")
+    ap.add_argument("--version-lists", metavar="DIR")
     ap.add_argument("--keep-going", action="store_true", help="carry on if the oracle can't read one batch")
     a = ap.parse_args()
     H.need("terrain_dump")
@@ -160,9 +242,21 @@ def main():
         k = key(seed, x >> 4, z >> 4)
         y = got.get(k, (None,))[0]
         if y is not None and y <= -DEEP:
-            have[k] = dict(seed=seed, x=x, z=z, y=y, source=src, verified=VERIFIED)
+            have[k] = dict(seed=seed, x=x, z=z, y=y, source=src, verified=VERIFIED, versions=[VERIFIED])
         else:
             bad.append((seed, x, z, claimed, "" if y is None else y, src))
+    groups = 0
+    if a.version_lists:
+        lists, groups = version_lists(a.version_lists)
+        for k, d in have.items():
+            if k in lists:
+                d["versions"] = sorted(set(lists[k]), key=lambda g: [int(n) for n in re.findall(r"\d+", g)])
+            elif not d.get("versions"):
+                d["versions"] = [VERIFIED]
+    else:
+        groups = max((len(d.get("versions") or []) for d in have.values()), default=0)
+        for d in have.values():
+            d.setdefault("versions", [VERIFIED])
     os.makedirs(os.path.join(a.out_dir, "data"), exist_ok=True)
     by = {}
     for d in have.values():
@@ -182,9 +276,27 @@ def main():
         f.write("#claimed\tseed\tx\tz\toracle_y\tsource\n")
         for seed, x, z, claimed, y, src in bad:
             f.write("%s\t%s\t%d\t%d\t%s\t%s\n" % (-claimed if claimed else "", seed, x, z, y, src))
-    table = table_md(by)
-    for path in [os.path.join(a.out_dir, "README.md")] + a.readme:
-        put_block(path, table)
+    ranked = rank_huts(by)
+    with open(os.path.join(a.out_dir, "RANKING.md"), "w", encoding="utf-8") as f:
+        f.write(ranking_md(ranked, groups))
+    with open(os.path.join(a.out_dir, "data", "ranked.tsv"), "w", encoding="utf-8") as f:
+        f.write("#rank\tdepth\tseed\tx\ty\tz\tdistance\tsource\n")
+        for d in ranked:
+            f.write("%d\t%d\t%s\t%d\t%d\t%d\t%d\t%s\n" % (d["rank"], d["y"], d["seed"], d["x"], d["y"] + 2, d["z"], d["dist"], d["source"]))
+    summary = dict(total=len(ranked), updated=time.strftime("%Y-%m-%d"), **{"y%d" % -y: len(v) for y, v in by.items()})
+    sp = os.path.join(a.out_dir, "data", "summary.json")
+    try:
+        old = json.load(open(sp))
+        if {k: v for k, v in old.items() if k != "updated"} == {k: v for k, v in summary.items() if k != "updated"}:
+            summary["updated"] = old.get("updated", summary["updated"])          # only a real change moves the date
+    except (OSError, ValueError):
+        pass
+    with open(sp, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=1, sort_keys=True)
+        f.write("\n")
+    put_block(os.path.join(a.out_dir, "README.md"), table_md(by, ranked, groups))
+    for path in a.readme:
+        put_block(path, short_md(len(ranked)).replace("BADGES", badges(by)))
     print("kept %d (%s), %d unconfirmed" % (len(have), ", ".join("%d: %d" % (y, len(by[y])) for y in sorted(by)), len(bad)))
     if a.commit:
         print(commit(a.out_dir, len(cands) - len(bad), a.push))

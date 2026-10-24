@@ -279,6 +279,7 @@ class App:
         self.m_text, self.m_seed, self.m_note = "795374283637013279", 795374283637013279, ""
         self.m_ver = W.DEFAULT_VERSION
         self.m_cx, self.m_cz, self.m_zoom, self.m_hl = 5811, 4423, 2, False
+        self.h_cat_seen = time.time()                           # catalog syncs after this are worth a toast
         self.m_over = False                                     # the whole-world view: no terrain, just where the known huts are
         self.m_edit, self.m_rect = False, (0, 0, 10, 10)
         self.pic_req, self.pic_on, self.pic_sent, self.pic_cache, self.prev, self.scr = None, None, None, (None, None), None, None
@@ -1224,6 +1225,10 @@ class App:
         mine = [(W.Find(-r_["depth"], r_["seed"], r_["x"], r_["y"], r_["z"], "found on this machine"), r_["seed"] in known) for r_ in res]
         self.h_rows = mine
         self.finds = self.base_finds + [f for f, _ in mine if (f.seed, f.x, f.z) not in have]
+        cs = hunt.catalog_status()
+        if cs and cs[0] > self.h_cat_seen:
+            self.h_cat_seen = cs[0]
+            self.say(cs[1], 8)
         self.h_busy, self.dirty = False, True
 
     def hunt_tick(self, force=False):

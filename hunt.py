@@ -833,6 +833,8 @@ class Run:
                 fh.write(failed)
             print("driver aborted:", failed, flush=True)
             return 1
+        if outcome == "found":
+            sync_catalog()
         print("driver finished:", outcome, flush=True)
         return 0
 
@@ -1589,6 +1591,21 @@ class ScanRun(Run):
                     funnel=[("regions", regions), ("candidates", cands), ("huts", hits)],
                     found=self.found(), best=self.found()[:5], problems=self.lines("problems.txt")[-5:],
                     failed=(self.lines("FAILED") or [None])[0], live=live, outcome=live.get("phase") if not running else None)
+
+
+def sync_catalog():
+    """After a find, put the new -55 and deeper huts into the public list (a checkout of kyoubitt/low-y-witch-huts), in the background.
+    Only when a checkout is set up: WITCHHUT_CATALOG names it, else ~/src/low-y-witch-huts. Nobody else's copy pushes anywhere."""
+    repo = os.environ.get("WITCHHUT_CATALOG") or os.path.join(os.path.expanduser("~"), "src", "low-y-witch-huts")
+    script = os.path.join(ROOT, "tools", "export_catalog.py")
+    if getattr(sys, "frozen", False) or not os.path.isdir(os.path.join(repo, ".git")) or not os.path.isfile(script):
+        return
+    try:
+        subprocess.Popen([sys.executable, "-I", script, repo, "--commit", "--push", "--readme", os.path.join(ROOT, "README.md")],
+                         stdin=subprocess.DEVNULL, stdout=open(os.path.join(RUNS, "catalog.log"), "a"), stderr=subprocess.STDOUT,
+                         cwd=ROOT, start_new_session=True)
+    except OSError:
+        pass
 
 
 # ---- opening runs ----------------------------------------------------------------------------------------------------------------

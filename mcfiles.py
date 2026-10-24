@@ -18,7 +18,7 @@ import subprocess
 import sys
 import urllib.request
 
-ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.realpath(__file__))   # the .exe keeps its tools beside it
+from home import ROOT  # noqa: E402  (the project folder, or where the .exe unpacked its tools)
 MC_DIR = os.path.join(ROOT, "mc")
 VERSION = "1.21.4"
 MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
@@ -70,19 +70,84 @@ def _download(url, dest, sha1, say, label):
     os.replace(tmp, dest)
 
 
-def java_ok():
-    """(path, major version) of the java on PATH, or (None, 0)."""
-    java = shutil.which("java")
-    if not java:
-        return None, 0
+JRE_DIR = os.path.join(ROOT, "jre")             # the Java this app fetched for itself when the computer has none
+ADOPTIUM = "https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=x64&image_type=jre&os=%s&vendor=eclipse"
+
+
+def _major(java):
     try:
         out = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=20)
         text = out.stderr + out.stdout
         q = text.split('"')[1] if '"' in text else ""
-        major = int(q.split(".")[0]) if q.split(".")[0].isdigit() else 0
-        return java, major
+        return int(q.split(".")[0]) if q.split(".")[0].isdigit() else 0
     except (OSError, subprocess.SubprocessError, ValueError, IndexError):
-        return java, 0
+        return 0
+
+
+def java_ok():
+    """(path, major version) of the best Java: the one this app fetched, else the one on PATH; (None, 0) when there is none."""
+    own = os.path.join(JRE_DIR, "bin", "java.exe" if os.name == "nt" else "java")
+    best = (None, 0)
+    for java in (own if os.path.isfile(own) else None, shutil.which("java")):
+        if java:
+            m = _major(java)
+            if m >= 21:
+                return java, m
+            if best[0] is None:
+                best = (java, m)
+    return best
+
+
+def ensure_java(say):
+    """A Java 21 to run the oracle: the computer's own, or Eclipse Temurin's JRE (about 50 MB, checked against the SHA-256 its
+    publisher lists) unpacked into jre/ beside the app. Returns the path to java."""
+    java, major = java_ok()
+    if major >= 21:
+        return java
+    osname = {"nt": "windows", "posix": "mac" if sys.platform == "darwin" else "linux"}[os.name]
+    say("Java 21 isn't on this computer: fetching a small one (about 50 MB)")
+    try:
+        with urllib.request.urlopen(ADOPTIUM % osname, timeout=60) as r:
+            pkg = json.load(r)[0]["binary"]["package"]
+        url, want = pkg["link"], pkg["checksum"]
+        os.makedirs(MC_DIR, exist_ok=True)
+        part = os.path.join(MC_DIR, "jre.download")
+        h = hashlib.sha256()
+        with urllib.request.urlopen(url, timeout=60) as r, open(part, "wb") as f:
+            for block in iter(lambda: r.read(1 << 20), b""):
+                f.write(block)
+                h.update(block)
+    except (OSError, ValueError, KeyError, IndexError) as e:
+        raise RuntimeError("couldn't fetch Java 21: %s. Install it yourself (Temurin 21 JRE), then try again." % e)
+    if h.hexdigest() != want:
+        os.remove(part)
+        raise RuntimeError("the Java download didn't match its checksum (a bad download); try again")
+    say("Unpacking Java")
+    tmp = JRE_DIR + ".new"
+    shutil.rmtree(tmp, ignore_errors=True)
+    if part and url.endswith(".zip"):
+        import zipfile
+        with zipfile.ZipFile(part) as z:
+            z.extractall(tmp)
+    else:
+        import tarfile
+        with tarfile.open(part) as t:
+            t.extractall(tmp)
+    os.remove(part)
+    inner = [d for d in os.listdir(tmp) if os.path.isdir(os.path.join(tmp, d))]
+    src = os.path.join(tmp, inner[0]) if len(inner) == 1 else tmp
+    shutil.rmtree(JRE_DIR, ignore_errors=True)
+    os.replace(src, JRE_DIR)
+    shutil.rmtree(tmp, ignore_errors=True)
+    for name in ("java",):                                    # a tar keeps the mode, a zip doesn't
+        try:
+            os.chmod(os.path.join(JRE_DIR, "bin", name), 0o755)
+        except OSError:
+            pass
+    java, major = java_ok()
+    if major < 21:
+        raise RuntimeError("the Java that was fetched does not run on this computer")
+    return java
 
 
 def fetch(say=print):
@@ -90,10 +155,7 @@ def fetch(say=print):
     if ready():
         say("Minecraft files ready")
         return
-    java, major = java_ok()
-    if major < 21:
-        raise RuntimeError("Java 21 or newer is needed (found %s). Install it, then try again." %
-                           ("none" if not java else "Java %d" % major))
+    java = ensure_java(say)
     os.makedirs(MC_DIR, exist_ok=True)
     say("Asking Mojang which files 1.21.4 uses")
     try:

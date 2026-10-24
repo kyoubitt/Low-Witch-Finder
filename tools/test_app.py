@@ -641,7 +641,7 @@ def look(app, w=110, h=36):
 app, s = hunt_app()
 t = text_of(s)
 check("Hunt: the form is there", "Floor y" in t and "-58" in t and "or lower" in t and "Mode" in t and "GPU full" in t and "Start at" in t, t[:900])
-check("Hunt: the big button is Start", "Start hunting" in t and "Stop" not in t)
+check("Hunt: the big button is Start", "Start searching" in t and "Stop" not in t)
 check("Hunt: it says what the machine has, with the checks at the right", "✓ Test GPU" in t and "Test  (f)" in t and "Recheck  (r)" in t, t[-900:])
 check("Hunt: the GPU search has no Area row (it covers the far world)", "Area" not in t)
 started.clear()
@@ -668,8 +668,11 @@ check("Hunt: the scanner shows Seeds and Area", "Seeds" in t and "Area" in t and
 check("Hunt: Area says how long a seed takes here", "a seed here" in t)
 key(app, "up")
 key(app, "right")
-check("Hunt: -55 with a CPU mode switches to GPU full and says so", app.h_set["level"] == -55 and app.h_set["mode"] == "gpu" and "NVIDIA" in app.toast[0], (app.h_set, app.toast))
-key(app, "left")
+check("Hunt: Seed Check stops at -54 (deeper is Deep Dive)", app.h_set["level"] == -54, app.h_set)
+app.h_kind("dive")
+check("Hunt: Deep Dive with a CPU mode switches to GPU full and says so", app.h_set["level"] == -58 and app.h_set["mode"] == "gpu" and "NVIDIA" in app.toast[0], (app.h_set, app.toast))
+app.h_kind("check")
+check("Hunt: Seed Check comes back at -54", app.h_set["level"] == -54, app.h_set)
 key(app, "down")
 for _ in range(3):
     key(app, "right")
@@ -700,13 +703,14 @@ check("Hunt: Start passes the mode, the seeds and the area", started == [(-54, "
 
 # the mouse: the arrows of a stepper
 app, s = hunt_app()
-row = [z for z in app.hits if z[1] == 4 and z[2] == 3]
+fy = next(i for i, l in enumerate(text_of(s).split("\n")) if "Floor y" in l)
+row = [z for z in app.hits if z[1] == fy and z[2] == 3]
 check("Hunt: the Floor y stepper has two arrow zones", len(row) == 2, row)
-mouse(app, "press", row[1][0] + 1, 4)
-mouse(app, "release", row[1][0] + 1, 4)
+mouse(app, "press", row[1][0] + 1, fy)
+mouse(app, "release", row[1][0] + 1, fy)
 check("Hunt: clicking the right arrow goes deeper", app.h_set["level"] == -59, app.h_set)
-mouse(app, "press", row[0][0] + 1, 4)
-mouse(app, "release", row[0][0] + 1, 4)
+mouse(app, "press", row[0][0] + 1, fy)
+mouse(app, "release", row[0][0] + 1, fy)
 check("Hunt: clicking the left arrow comes back", app.h_set["level"] == -58)
 
 # a start that can't happen says why, and offers the fix
@@ -720,7 +724,7 @@ check("Hunt: s while blocked does not start, and explains", not started and app.
 NEEDS = [(True, "Test GPU", None), (False, "the Minecraft files aren't downloaded yet", "minecraft")]
 app, s = hunt_app(pre=NEEDS)
 t = text_of(s)
-check("Hunt: a missing piece turns the big button into its fix", "Get Minecraft files  (g)" in t and "Start hunting" not in t, t[:700])
+check("Hunt: a missing piece turns the big button into its fix", "Get Minecraft files  (g)" in t and "Start searching" not in t, t[:700])
 steps = []
 orig_get = A.mcfiles.fetch
 A.mcfiles.fetch = lambda log: (steps.append("fetch"), log("downloading..."))
@@ -747,12 +751,12 @@ open(run.f("done.txt"), "w").write("0 64\n64 64\n128 64\n")
 open(run.f("funnel.txt"), "w").write("0 64 1000000 1000000 400 9 2 80\n64 64 1100000 1100000 420 11 3 80\n128 64 900000 900000 380 8 1 80\n")
 open(run.f("chunk_times.txt"), "w").write("%d\n%d\n%d\n" % (now - 160, now - 80, now))
 open(run.f("problems.txt"), "w").write("2026-10-22 18:00:00 chunk 3: terrain stage failed (attempt 1 of 3)\n")
-live = dict(phase="terrain", detail="checking 82,000 matches against the ground", chunk=1234, unit_t0=now - 20, unit_expect=60, pid=os.getpid(),
+live = dict(phase="terrain", detail="checking 82,000 matches against the ground", chunk=1234, started=now - 200, unit_t0=now - 20, unit_expect=60, pid=os.getpid(),
             level=-58, mode="gpu", stopping=False, hot=False, gpu=dict(name="RTX", temp=83, util=100, mem_used=1700, mem_total=6144, watts=60.0))
 open(run.f("live.json"), "w").write(json.dumps(live))
 app, s = hunt_app()
 t = text_of(s)
-check("Hunt: a running hunt says so", "● Hunting" in t and "Stop  (x)" in t and "Start hunting" not in t, t[:700])
+check("Hunt: a running hunt says so", "● Hunting" in t and "Stop  (x)" in t and "Start searching" not in t, t[:700])
 check("Hunt: the settings show the running hunt's", app.h_set["level"] == -58 and app.h_set["mode"] == "gpu")
 check("Hunt: it shows the speed in seeds, the GPU and what it is doing", "seeds/s" in t and "GPU 83 °C" in t and "100%" in t and "checking 82,000 matches" in t, t[:900])
 check("Hunt: one bar that moves inside the chunk", "chunk 4" in t and "33%" in t and "█" in t, t[:900])
@@ -767,8 +771,9 @@ t = look(app)
 check("Hunt: ...and the screen says it is stopping", "Stopping..." in t, t[:600])
 st = H.SolveRun(-58, "gpu").status()
 check("Hunt: status adds the funnel up", (st["funnel"][0][1], st["funnel"][1][1], st["funnel"][2][1], st["chunks_done"]) == (3000000, 1200, 28, 3), st["funnel"])
-check("Hunt: speed comes from the spacing of finished chunks", st["rate"] and abs(st["rate"] - 1000000 / 80.0) < 3000, st["rate"])
-check("Hunt: ... and is shown in seeds a second", st["speed_text"].endswith("seeds/s") and st["speed_text"].startswith("819"), st["speed_text"])
+check("Hunt: speed is every match since the run began over the wall clock since then", st["rate"] and abs(st["rate"] - 3000000 / 200.0) < 100, st["rate"])
+check("Hunt: ... and is shown in seeds a second", st["speed_text"].endswith("seeds/s") and st["speed_text"].startswith("98"), st["speed_text"])
+check("Hunt: the wait is matches per find over that speed", st["eta_s"] and abs(st["eta_s"] - 6.4e6 / 15000) < 5 and st["eta_kind"] == "find", st["eta_s"])
 os.remove(run.f("STOP"))
 live.update(phase="cooling", detail="the GPU is at 89 C: waiting for 82 C")
 open(run.f("live.json"), "w").write(json.dumps(live))
@@ -803,7 +808,7 @@ os.remove(run.f("driver.pid"))
 live.update(phase="found", detail="")
 open(run.f("live.json"), "w").write(json.dumps(live))
 app, s = hunt_app()
-check("Hunt: after a find it says so and Start carries on", "Found a hut!" in text_of(s) and "Start hunting" in text_of(s), text_of(s)[:700])
+check("Hunt: after a find it says so and Start carries on", "Found a hut!" in text_of(s) and "Start searching" in text_of(s), text_of(s)[:700])
 live.update(phase="stopped")
 open(run.f("live.json"), "w").write(json.dumps(live))
 app, s = hunt_app()
@@ -862,7 +867,7 @@ app.h_set.update(level=-52, mode="cpu-gentle", seeds="42", area=1)
 app.save_prefs()
 app2 = A.App(None, sync=True)
 app2.apply_prefs()
-check("Hunt: floor, mode, seeds and area come back next time", app2.h_set == dict(level=-52, mode="cpu-gentle", seeds="42", area=1), app2.h_set)
+check("Hunt: floor, mode, seeds and area come back next time", app2.h_set == dict(level=-52, mode="cpu-gentle", seeds="42", area=1, or_lower=True), app2.h_set)
 W.save_prefs(dict(hunt=dict(level=-58, mode="cpu", seeds="x", area=99)))
 app3 = A.App(None, sync=True)
 app3.apply_prefs()
@@ -901,7 +906,7 @@ with open(W.prefs_path(), "w") as f:
     f.write('{"seed": "abc", "zoom": 99, "version": 1, "theme": "x"}')
 app4, _ = fresh()
 app4.apply_prefs()
-check("odd values are clamped, not trusted", app4.m_zoom <= A.MAX_ZOOM and app4.m_ver == 1)
+check("odd values are clamped, not trusted", app4.m_zoom <= A.MAX_ZOOM and app4.m_ver == 0)
 
 # ---- sizes and themes: nothing may raise, nothing may draw outside the screen
 for theme in ("light", "dark"):
@@ -921,6 +926,60 @@ for theme in ("light", "dark"):
             except Exception as e:  # noqa: BLE001
                 check("render %s %dx%d %s" % (theme, w, h, tab), False, repr(e))
 check("every size and theme renders", not [f for f in fails if f.startswith("render")])
+
+# the world view: no terrain, the known low huts of the seed, a click goes there
+app, s = fresh(120, 30, "map")
+app.finds = [W.Find(-59, "77", 12_000_000, -59, -9_000_000, "x")]
+app.m_text, app.m_seed = "77", 77
+ch(app, "w")
+s = redraw(app, 120, 30)
+t = text_of(s)
+check("World: w opens the world view", app.m_over and "The world" in t and "30M" in t and "-59" in t and "★" in t, t[:600])
+check("World: it knows where the hut is on screen", len(app.m_marks) == 1)
+col, row = app.m_marks[0][:2]
+mouse(app, "press", col, row)
+mouse(app, "release", col, row)
+check("World: clicking a hut goes to it", not app.m_over and app.m_zoom == 0 and app.m_cx >> 4 == 12_000_000 >> 4, (app.m_over, app.m_zoom, app.m_cx))
+app.m_zoom = A.MAX_ZOOM
+app.m_zoom_to(A.MAX_ZOOM + 1)
+check("World: one step past the widest map is the world view", app.m_over)
+app.m_zoom_to(A.MAX_ZOOM - 1)
+check("World: zooming in leaves it", not app.m_over)
+for w_, h_ in ((66, 16), (80, 24), (200, 50)):
+    app.m_over = True
+    try:
+        redraw(app, w_, h_)
+        ok = True
+    except Exception as e:  # noqa: BLE001
+        ok = repr(e)
+    check("World: draws at %dx%d" % (w_, h_), ok is True, ok)
+
+# the size: small, medium, large
+app, s = hunt_app()
+check("Size: starts at medium", A.SIZE == 1)
+ch(app, "u")
+check("Size: u goes to large and says so", A.SIZE == 2 and "Large" in app.toast[0], (A.SIZE, app.toast))
+l_ = text_of(redraw(app, 110, 36))
+ch(app, "u")
+check("Size: ...then wraps to small", A.SIZE == 0)
+s_ = text_of(redraw(app, 110, 36))
+A.apply_size(1)
+m_ = text_of(redraw(app, 110, 36))
+rows = lambda t: next(i for i, l in enumerate(t.split("\n")) if "Start searching" in l)       # noqa: E731
+check("Size: large spaces the form out, small tucks it in", rows(l_) > rows(m_) > rows(s_) or rows(l_) > rows(m_) >= rows(s_), (rows(l_), rows(m_), rows(s_)))
+check("Size: small keeps Deep Dive's warning", "Looks for NEW seeds" in s_)
+for sz in (0, 1, 2):
+    A.apply_size(sz)
+    for w_, h_ in ((66, 16), (80, 24), (110, 36), (200, 50)):
+        for tab in ("map", "hunt"):
+            try:
+                a2, _ = fresh(w_, h_, tab)
+                redraw(a2, w_, h_)
+                ok = True
+            except Exception as e:  # noqa: BLE001
+                ok = repr(e)
+            check("Size %d draws %s at %dx%d" % (sz, tab, w_, h_), ok is True, ok)
+A.apply_size(1)
 
 print("\n%s" % ("all passed" if not fails else "%d FAILED" % len(fails)))
 sys.exit(1 if fails else 0)

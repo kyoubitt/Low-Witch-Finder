@@ -32,7 +32,8 @@ import threading
 import time
 import types
 
-ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.realpath(__file__))   # the .exe keeps its tools beside it
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))     # python -I leaves the script folder off the path
+from home import ROOT  # noqa: E402  (the project folder, or where the .exe unpacked its tools)
 sys.path.insert(0, ROOT)
 import tui_core as T                                                   # noqa: E402
 from tui_core import CLEAR, PIC_IDS, Picture, Screen, Term, mix, parse_input, twidth, wrap   # noqa: E402
@@ -56,6 +57,13 @@ THEMES = {
         MAPBG=0x0e120b),
 }
 THEME = "light"
+SIZES = ("Small", "Medium", "Large")                # the interface size, like the game's GUI scale: a layout density, since a terminal's font is its own
+SIZE = 1
+
+
+def apply_size(i):
+    global SIZE
+    SIZE = i if i in (0, 1, 2) else 1
 
 
 def apply_theme(name):
@@ -70,9 +78,9 @@ HUT_COL = 0xffd23f                          # a place a hut generates
 DEPTH_COL = {-59: 0xff5fa2, -58: 0xff9a3a, -57: 0xffd23f}   # known low huts, by depth
 SWAMP_COL = 0xb4e03a
 ORIGIN_COL = 0xffffff
-HELP = [("Everywhere", None), ("1  2", "Map, Hunt"), ("t", "light or dark"), ("?", "this help"), ("q", "quit (a hunt keeps going)"),
+HELP = [("Everywhere", None), ("1  2", "Map, Hunt"), ("u", "size: small, medium, large"), ("t", "light or dark"), ("?", "this help"), ("q", "quit (a hunt keeps going)"),
         ("", None), ("Map", None), ("z", "nearest hut"), ("r", "random seed"), ("e", "type a seed"), ("drag, scroll", "pan, zoom"),
-        ("k", "known low huts"), ("[  ]", "game version"), ("click a hut", "select it; c copies its /tp"),
+        ("k", "known low huts"), ("w", "whole world, no terrain"), ("[  ]", "game version"), ("click a hut", "select it; c copies its /tp"),
         ("", None), ("Hunt", None), ("up down, left right", "pick a setting, change it"), ("s  x", "start, stop"),
         ("c  m", "copy / show on the map the selected hut"), ("n", "new random start (-55 and deeper)"),
         ("", None), ("Known huts popup", None), ("up down, left right", "move, filter by depth"), ("o", "closest or deepest first"),
@@ -261,7 +269,7 @@ class App:
         self.base_finds = W.load_finds()
         self.finds = list(self.base_finds)        # plus whatever the finder finds on this machine
         # the finder (Hunt tab): what is picked, what the last check found, a build or download in progress
-        self.h_set = dict(level=-58, mode="gpu", seeds="", area=len(hunt.AREAS) - 1)
+        self.h_set = dict(level=-58, mode="gpu", seeds="", area=len(hunt.AREAS) - 1, or_lower=True)
         self.h_focus, self.h_edit, self.h_before, self.h_gen = "level", False, "", 0
         self.h_info, self.h_rows, self.h_sel, self.h_top = None, [], 0, 0
         self.h_next, self.h_busy, self.h_machine, self.h_mach_t = 0.0, False, None, 0.0
@@ -271,6 +279,7 @@ class App:
         self.m_text, self.m_seed, self.m_note = "795374283637013279", 795374283637013279, ""
         self.m_ver = W.DEFAULT_VERSION
         self.m_cx, self.m_cz, self.m_zoom, self.m_hl = 5811, 4423, 2, False
+        self.m_over = False                                     # the whole-world view: no terrain, just where the known huts are
         self.m_edit, self.m_rect = False, (0, 0, 10, 10)
         self.pic_req, self.pic_on, self.pic_sent, self.pic_cache, self.prev, self.scr = None, None, None, (None, None), None, None
         self.pending = ""                  # input cut off mid-sequence (a lone Esc waits here a moment)
@@ -489,6 +498,13 @@ class App:
         return None
 
     def m_zoom_to(self, z, mx=None, my=None):
+        if self.m_over:                                          # zooming in leaves the world view; there is nothing further out
+            if z < self.m_zoom:
+                self.m_over, self.dirty = False, True
+            return
+        if z > MAX_ZOOM:                                         # one step past the widest map is the world view
+            self.m_over, self.dirty = True, True
+            return
         z = max(0, min(MAX_ZOOM, z))
         if z == self.m_zoom:
             return
@@ -599,10 +615,17 @@ class App:
                 s.put(x, 0, label, TEXT if over else MUTED, HOVER if over else PAGE)
             self.hits.append((x, 0, twidth(label), 1, (lambda tid=tid: self.set_tab(tid))))
             x += twidth(label) + 1
-        hint = "t theme   ? help   q quit"
+        hint = "u size   t theme   ? help   q quit"
         if w - 2 - twidth(hint) > x:
             s.put(w - 2 - twidth(hint), 0, hint, MUTED, PAGE)
+            self.hits.append((w - 2 - twidth(hint), 0, 6, 1, self.cycle_size))
         s.hline(0, 1, w, LINE)
+
+    def cycle_size(self):
+        apply_size((SIZE + 1) % 3)
+        self.say("Size: %s" % SIZES[SIZE], 3)
+        self.dirty = True
+        self.remember()
 
     def set_tab(self, tid):
         self.tab, self.m_edit, self.dirty = tid, False, True
@@ -756,6 +779,8 @@ class App:
         x = self.button(s, x, y, "›", (lambda: self.m_next_ver(1))) + 1
         x = self.button(s, x, y, "Nearest hut", self.m_zoom_hut, True)
         x = self.button(s, x, y, "–", (lambda: self.m_zoom_to(self.m_zoom + 1)))
+        if w >= 120:
+            x = self.button(s, x, y, "World", self.m_toggle_world, self.m_over)
         if w >= 110:
             lab = "%s/col" % fmt(self.m_scale()[0])
             s.put(x, y, lab, MUTED, PAGE)
@@ -766,6 +791,9 @@ class App:
 
     def m_focus(self):
         self.m_edit, self.dirty = True, True
+
+    def m_toggle_world(self):
+        self.m_over, self.dirty = not self.m_over, True
 
     def m_toggle_hl(self):
         self.m_hl, self.dirty = not self.m_hl, True
@@ -808,13 +836,66 @@ class App:
         mh = bottom - my - (1 if wide else 2)
         self.m_pic = self.pic_info(mw, mh)
         self.m_rect = (mx, my, mw, mh)
-        self.m_request()
-        self.draw_pixels(s, mx, my, mw, mh)
+        if self.m_over:
+            self.draw_overview(s, mx, my, mw, mh)
+        else:
+            self.m_request()
+            self.draw_pixels(s, mx, my, mw, mh)
         self.draw_map_status(s, 1, my + mh, mw if wide else w - 2)
         if wide:
             self.draw_map_panel(s, mx + mw + 1, top + 1, panel, bottom - top - 1)
         else:
             self.draw_map_actions(s, 1, my + mh + 1, w - 2)
+
+    def draw_overview(self, s, ox, oy, mw, mh):
+        """The whole world, +-30 million blocks, with no terrain (it would be a smear at this size): a frame, a grid, the
+        origin and the low huts known for this seed."""
+        half = 30_000_000
+        plate = mix(MAPBG, 0x000000, 0.4)
+        s.fill(ox, oy, mw, mh, plate)
+        bpc = 2.0 * half / max(1, min(mw - 2, 2 * (mh - 3)))               # blocks a column; a row is twice that, so it stays square
+        bpr = 2 * bpc
+        wc, wr = int(2 * half / bpc), int(2 * half / bpr)
+        left, top = ox + (mw - wc) // 2, oy + 1 + (mh - 2 - wr) // 2
+        at = lambda bx, bz: (left + int((bx + half) / bpc), top + int((bz + half) / bpr))     # noqa: E731
+        faint, edge = mix(MAPBG, 0xffffff, 0.14), mix(MAPBG, 0xffffff, 0.45)
+        grid = list(range(-half, half + 1, 10_000_000))
+        cols = {min(at(g, 0)[0], left + wc): g for g in grid}                 # screen column -> the block x of that line
+        rows_ = {min(at(0, g)[1], top + wr): g for g in grid}
+
+        def shade(g):
+            return ORIGIN_COL if g == 0 else (edge if abs(g) == half else faint)
+        for col, gx in cols.items():
+            for r_ in range(top, min(oy + mh, top + wr + 1)):
+                s.put(col, r_, "│", shade(gx), plate)
+        for row, gz in rows_.items():
+            for c_ in range(left, min(ox + mw, left + wc + 1)):
+                s.put(c_, row, "┼" if c_ in cols else "─", shade(gz), plate)
+        for col, gx in cols.items():
+            lab = "%dM" % (gx // 1_000_000)
+            x_ = max(ox, min(ox + mw - twidth(lab), col - twidth(lab) // 2))
+            if top + wr + 1 < oy + mh:
+                s.put(x_, top + wr + 1, lab, MUTED, plate)
+        ox_, oz_ = at(0, 0)
+        s.put(ox_, oz_, "+", ORIGIN_COL, plate, True)
+        marks = []
+        finds = self.known_here()
+        for f in finds:
+            col, row = at(f.x, f.z)
+            c = (f.x >> 4, f.z >> 4)
+            on = self.m_sel == c
+            s.put(col, row, "★", ON_ACCENT if on else DEPTH_COL.get(f.depth, HUT_COL), ACCENT if on else plate, True)
+            if col + 5 < ox + mw:
+                s.put(col + 1, row, " %d " % f.depth, DEPTH_COL.get(f.depth, TEXT), plate, True)
+            marks.append((col, row, c, f))
+        self.m_marks = marks
+        head = " The world · no terrain · grid every 10M blocks "
+        s.put(ox + 1, oy, head[:mw - 2], TEXT, plate, True)
+        if self.m_seed is None:
+            self.map_message(s, ox, oy, mw, mh, "Type a seed above (press e), or press Random.")
+        elif not finds:
+            self.map_message(s, ox, oy + mh // 2 - 1, mw, 3, "No low huts known for this seed yet.",
+                             help2="Run Seed Check on the Hunt tab, then Show on map")
 
     def m_rows(self, x0, z0, step, pw, ph):
         """The biome ids for the view, one bytearray per sample row (255 = nothing yet). Whatever has been fetched fills it, so
@@ -930,7 +1011,7 @@ class App:
         if 0 <= ox_ < Wp and 0 <= oz_ < Hp:
             P.tint(ox_ - 7, oz_, ox_ + 8, oz_ + 1, ORIGIN_COL, 0.9)
             P.tint(ox_, oz_ - 7, ox_ + 1, oz_ + 8, ORIGIN_COL, 0.9)
-        rr = max(3.0, cell_h * 0.26)
+        rr = max(3.0, cell_h * (0.2, 0.26, 0.36)[SIZE])
         for (i, j, col, row, c, f) in sorted(marks, key=lambda m: m[5] is not None):
             cx, cy = (i + 0.5) * px, (j + 0.5) * py
             half = max(2, round(rr * 0.8))                               # a flat square, outlined: reads on every biome
@@ -1017,8 +1098,11 @@ class App:
     def draw_map_status(self, s, x, y, w):
         """One line under the map: what is under the pointer (or the middle of the view), and the legend."""
         s.fill(x, y, w, 1, PAGE)
-        hv = self.hover_info()
-        if hv:
+        hv = None if self.m_over else self.hover_info()
+        if self.m_over:
+            n = len(self.known_here())
+            txt, col = "the whole world  ·  %d known low hut%s on this seed  ·  w or + goes back to the map" % (n, "" if n == 1 else "s"), MUTED
+        elif hv:
             txt, col = "x %s  z %s  chunk %d, %d  %s" % (fmt(hv[0]), fmt(hv[1]), hv[0] >> 4, hv[1] >> 4, hv[2] or "-"), TEXT
         else:
             txt, col = "middle x %s  z %s  ·  %s blocks per column" % (fmt(self.m_cx), fmt(self.m_cz), fmt(self.m_scale()[0])), MUTED
@@ -1103,7 +1187,7 @@ class App:
     def hunt_settings(self):
         """What is picked on the screen, in the form hunt.make_run takes."""
         s = self.h_set
-        return dict(level=s["level"], mode=s["mode"], seeds=s["seeds"], area=hunt.AREAS[s["area"]][0])
+        return dict(level=s["level"], mode=s["mode"], seeds=s["seeds"], area=hunt.AREAS[s["area"]][0], or_lower=bool(s.get("or_lower", True)))
 
     def h_fields(self):
         return ["level", "mode", "seeds"] + (["area"] if self.h_set["level"] > -55 else [])
@@ -1114,7 +1198,7 @@ class App:
     def h_adopt(self, sets):
         """A hunt is running (maybe from an earlier session): show its settings."""
         a = next((i for i, (v, _) in enumerate(hunt.AREAS) if v == sets["area"]), len(hunt.AREAS) - 1)
-        self.h_set = dict(level=sets["level"], mode=sets["mode"], seeds=sets["seeds"], area=a)
+        self.h_set = dict(level=sets["level"], mode=sets["mode"], seeds=sets["seeds"], area=a, or_lower=sets.get("or_lower", True))
 
     def hunt_poll(self):
         """Refresh what the Hunt tab shows. On a thread: the checks call nvidia-smi and look at the process list."""
@@ -1122,7 +1206,7 @@ class App:
         try:
             cur = hunt.running()
             sets = cur.settings() if cur else self.hunt_settings()
-            run = cur or hunt.make_run(sets["level"], sets["mode"], sets["seeds"], sets["area"])
+            run = cur or hunt.make_run(sets["level"], sets["mode"], sets["seeds"], sets["area"], or_lower=sets["or_lower"])
             if time.monotonic() >= self.h_mach_t:
                 self.h_machine, self.h_mach_t = hunt.machine(), time.monotonic() + 30
             info = dict(run=run, running=bool(cur), settings=sets, status=run.status(), machine=self.h_machine,
@@ -1176,7 +1260,8 @@ class App:
             return
         s = self.h_set
         if field == "level":
-            lv = max(-59, min(-50, s["level"] - d))
+            lo, hi = (-59, -55) if s["level"] <= -55 else (-54, -50)     # Deep Dive and Seed Check each keep their own range
+            lv = max(lo, min(hi, s["level"] - d))
             if lv == s["level"]:
                 return
             s["level"] = lv
@@ -1192,6 +1277,31 @@ class App:
         elif field == "area":
             s["area"] = max(0, min(len(hunt.AREAS) - 1, s["area"] + d))
         self.h_changed()
+
+    def h_kind(self, kind):
+        """Switch between the two searches: Seed Check (-50 to -54, scans seeds) and Deep Dive (-55 to -59, finds seeds)."""
+        if self.h_locked():
+            self.say("Stop the hunt to switch", 3)
+            return
+        s = self.h_set
+        if kind == "dive" and s["level"] > -55:
+            s["level"] = -58
+            if not hunt.MODES[s["mode"]]["gpu"]:
+                s["mode"] = "gpu"
+                self.say("Deep Dive needs an NVIDIA card, so the mode is now GPU full", 5)
+        elif kind == "check" and s["level"] <= -55:
+            s["level"] = -54
+        self.h_focus, self.dirty = "level", True
+        self.h_changed()
+
+    def h_toggle_lower(self):
+        if self.h_locked():
+            self.say("Stop the hunt to change this", 3)
+        elif self.h_set["level"] <= -54:
+            self.say("-54 always means -54 or deeper: natural terrain stops there, deeper huts sit on a mineshaft room", 5)
+        else:
+            self.h_set["or_lower"] = not self.h_set.get("or_lower", True)
+            self.h_changed()
 
     def h_edit_seeds(self):
         if self.h_locked():
@@ -1210,7 +1320,7 @@ class App:
     def hunt_start(self):
         sets = self.hunt_settings()
         try:
-            hunt.make_run(sets["level"], sets["mode"], sets["seeds"], sets["area"]).start_detached()
+            hunt.make_run(sets["level"], sets["mode"], sets["seeds"], sets["area"], or_lower=sets["or_lower"]).start_detached()
         except hunt.HuntError as e:
             self.say(str(e), 7)
             return
@@ -1232,7 +1342,7 @@ class App:
             self.say("New spot is for the -55 and deeper search; the other one makes up new seeds by itself", 5)
         else:
             sets = self.hunt_settings()
-            hunt.make_run(sets["level"], sets["mode"], "", sets["area"]).new_spot()
+            hunt.make_run(sets["level"], sets["mode"], "", sets["area"], or_lower=sets["or_lower"]).new_spot()
             self.h_set["seeds"] = ""
             self.say("The next start picks another random place", 4)
 
@@ -1301,7 +1411,9 @@ class App:
         foot = bottom - 1                                        # the machine line sits under the cards
         sw = 66 if wide else cw
         c.inline = not wide and cw >= 85                         # room for a line of explanation beside each setting?
-        n = 3 if c.solver else 4
+        c.gap = 1 if SIZE == 2 else 0                            # Large: a blank row between settings
+        c.expl = 0 if (SIZE == 0 and not c.solver) else 2        # Small drops Seed Check's explanation; Deep Dive's warning stays
+        n = (3 if c.solver else 4) * (1 + c.gap) + c.expl       # the settings, with the explanation; the kind buttons take the row the card gave
         c.fail_lines = []
         for text, _ in c.fails[:3]:
             c.fail_lines += wrap(text, sw - 6)[:2]
@@ -1331,7 +1443,7 @@ class App:
         self.h_footer(s, x0, foot, cw, info)
 
     def h_search(self, s, x, y, w, h, c):
-        self.card(s, x, y, w, h, "Search")
+        self.card(s, x, y, w, h, "Deep Dive" if c.solver else "Seed Check")
         ix = x + 3
         end = y + h - 2                                          # the last row inside the card
         S, running, mach = c.S, c.running, c.mach
@@ -1345,19 +1457,33 @@ class App:
                 said[field] = (text, col)                           # narrow window: say it under the form, for the picked setting
 
         fl = lambda f: self.h_focus == f and not running           # noqa: E731
-        yy = y + 2
+        yy = y + 1
+        bx = ix
+        for kind, label in (("check", "Seed Check"), ("dive", "Deep Dive")):
+            on = c.solver == (kind == "dive")
+            bx = self.button(s, bx, yy, label, (lambda k=kind: self.h_kind(k)), on) + 1
+        yy += 1
+        for line in wrap("Looks for NEW seeds. It does not scan a seed you give it: huts at -55 and lower are far too rare to turn up "
+                         "on one you already have." if c.solver else
+                         "Scans seeds you type (or ones made up as it goes) for huts this deep, closest to 0,0 first.", w - 6)[:c.expl]:
+            s.put(ix, yy, line, WARN if c.solver else MUTED, CARD)
+            yy += 1
         s.put(ix, yy, "Floor y", ACCENT if fl("level") else MUTED, CARD, fl("level"))
         bx = self.stepper(s, ix + 11, yy, "%d" % S["level"], 4, "level", running)
-        s.put(bx + 1, yy, "or lower", MUTED, CARD)
+        lower = c.solver or S.get("or_lower", True) or S["level"] <= -54
+        lab = "or lower" if lower else "exactly"
+        s.put(bx + 1, yy, lab, ACCENT if not c.solver else MUTED, CARD, not c.solver)
+        if not c.solver:
+            self.hits.append((bx + 1, yy, 8, 1, self.h_toggle_lower))
         hint("level", yy, "needs an NVIDIA GPU" if c.solver else "CPU or GPU")
-        yy += 1
+        yy += 1 + c.gap
         s.put(ix, yy, "Mode", ACCENT if fl("mode") else MUTED, CARD, fl("mode"))
         self.stepper(s, ix + 11, yy, hunt.MODES[S["mode"]]["label"], 10, "mode", running)
         if hunt.MODES[S["mode"]]["gpu"] and mach and not mach.get("gpu"):
             hint("mode", yy, "no NVIDIA card found", WARN)
         else:
             hint("mode", yy, hunt.MODES[S["mode"]]["blurb"])
-        yy += 1
+        yy += 1 + c.gap
         s.put(ix, yy, "Start at" if c.solver else "Seeds", ACCENT if fl("seeds") else MUTED, CARD, fl("seeds"))
         bx = self.seeds_box(s, ix + 11, yy, 24, running, "a random place" if c.solver else "made up for you")
         if c.solver and not running:
@@ -1368,13 +1494,13 @@ class App:
                 said["seeds"] = ("or type a number to always start at the same place", MUTED)
         else:
             hint("seeds", yy, "type a number to start there" if c.solver else "or type seeds, or a file of them")
-        yy += 1
+        yy += 1 + c.gap
         if not c.solver:
             s.put(ix, yy, "Area", ACCENT if fl("area") else MUTED, CARD, fl("area"))
             self.stepper(s, ix + 11, yy, hunt.AREAS[S["area"]][1], 15, "area", running)
             per = self.seed_eta(c.st, hunt.AREAS[S["area"]][0], S["mode"])
             hint("area", yy, ("around 0,0 · about %s a seed here" % self.wait_text(per)) if per else "around 0,0")
-            yy += 1
+            yy += 1 + c.gap
         if not c.inline and said.get(self.h_focus):
             s.put(ix, yy, said[self.h_focus][0][:w - 6], said[self.h_focus][1], CARD)
         yy += 1
@@ -1402,9 +1528,9 @@ class App:
                 label, key = self.FIXES[fix]
                 self.button(s, ix, yy, "%s  (%s)" % (label, key), self.build if key == "b" else self.get_mc, True)
             else:
-                self.button(s, ix, yy, "Start hunting  (s)", (lambda: self.say(c.fails[0][0], 7)))
+                self.button(s, ix, yy, "Start searching  (s)" if c.solver else "Start checking  (s)", (lambda: self.say(c.fails[0][0], 7)))
         else:
-            bx = self.button(s, ix, yy, "Start hunting  (s)", self.hunt_start, True)
+            bx = self.button(s, ix, yy, "Start searching  (s)" if c.solver else "Start checking  (s)", self.hunt_start, True)
             msg, col = None, MUTED
             if st and st.get("failed"):
                 msg, col = "Stopped: " + st["failed"], DANGER
@@ -1462,9 +1588,12 @@ class App:
                 rows.append(("text", "  →  ".join("%s %s" % (lab, hunt.short_count(n)) for lab, n in st["funnel"]), MUTED))
             if c.running:
                 if st.get("eta_s"):
-                    rows.append(("text", "about one find every %s (an average)" % self.wait_text(st["eta_s"]), MUTED))
+                    rows.append(("text", ("about %s left" if st.get("eta_kind") == "finish" else
+                                          "about one find every %s on this PC (an average)") % self.wait_text(st["eta_s"]), MUTED))
+                elif st.get("measuring"):
+                    rows.append(("text", "timing this PC... an estimate shows after a minute or two", MUTED))
                 elif st["kind"] == "solver" and not st.get("eta_known") and st.get("rate"):
-                    rows.append(("text", "time per find shows once it has found some", MUTED))
+                    rows.append(("text", "time per find shows once it has found a few", MUTED))
                 for line in (st.get("problems") or [])[-1:]:
                     rows.append(("text", line, WARN))
         return rows
@@ -1656,7 +1785,9 @@ class App:
         c = c.lower() if len(c) == 1 else c
         if c in ("q",):
             raise SystemExit
-        if c == "t":
+        if c == "u":
+            self.cycle_size()
+        elif c == "t":
             apply_theme("dark" if THEME == "light" else "light")
             self.dirty = True
             self.remember()
@@ -1683,6 +1814,8 @@ class App:
                 self.m_next_ver(-1)
             elif c == "h":
                 self.m_toggle_hl()
+            elif c == "w":
+                self.m_toggle_world()
             elif c == "o":
                 self.m_cx, self.m_cz, self.dirty = 0, 0, True
             elif c == "c" and self.m_sel is not None:
@@ -1827,6 +1960,9 @@ class App:
             if d <= 1 and d < bd:
                 best, bd = c, d
         self.m_sel = best
+        if self.m_over and best is not None:                     # a hut in the world view: go there
+            self.m_over = False
+            self.m_goto_hut(best)
         self.dirty = True
 
     def feed(self, data):
@@ -1850,6 +1986,8 @@ class App:
             pass
         if p.get("theme") in THEMES:
             apply_theme(p["theme"])
+        if isinstance(p.get("size"), int):
+            apply_size(p["size"])
         v = p.get("version")
         if isinstance(v, str) and any(x[0] == v for x in W.VERSIONS):
             self.m_ver = next(i for i, x in enumerate(W.VERSIONS) if x[0] == v)
@@ -1875,6 +2013,8 @@ class App:
             self.h_set["seeds"] = h["seeds"][:2000]
         if isinstance(ar, int) and 0 <= ar < len(hunt.AREAS):
             self.h_set["area"] = ar
+        if isinstance(h.get("or_lower"), bool):
+            self.h_set["or_lower"] = h["or_lower"]
 
     def remember(self):
         """Save the choices as they are made, so closing the window or a crash never loses them (not in the checks)."""
@@ -1882,7 +2022,7 @@ class App:
             self.save_prefs()
 
     def save_prefs(self):
-        W.save_prefs(dict(theme=THEME, seed=self.m_text, version=self.ver()[0], cx=self.m_cx, cz=self.m_cz, zoom=self.m_zoom,
+        W.save_prefs(dict(theme=THEME, size=SIZE, seed=self.m_text, version=self.ver()[0], cx=self.m_cx, cz=self.m_cz, zoom=self.m_zoom,
                           hunt=dict(self.h_set)))
 
     def run(self):

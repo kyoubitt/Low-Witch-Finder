@@ -38,7 +38,8 @@ import threading
 import time
 import traceback
 
-ROOT = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.realpath(__file__))   # the .exe keeps its tools beside it
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))     # the driver runs as python -I, which leaves its own folder off the path
+from home import ROOT  # noqa: E402  (the project folder, or where the .exe unpacked its tools)
 sys.path.insert(0, ROOT)
 import mcfiles  # noqa: E402
 import witchhut_common as W  # noqa: E402
@@ -64,6 +65,8 @@ AREAS = ((5000, "5,000 blocks"), (20000, "20,000 blocks"), (100000, "100,000 blo
 # Matches per find, measured on an RTX 4090 over ~135M matches (-58) and an ~5 hour run (-59). The other levels have no
 # measurement yet, so they get no estimate rather than an invented one.
 PER_FIND = {-58: 6.4e6, -59: 7.0e7}
+MEASURE_CHUNKS, MEASURE_SECONDS = 3, 90      # a speed is only quoted after this many chunks and seconds of this run
+SELF_FINDS = 3                               # finds on this machine before its own matches-per-find replaces the measured figure
 SEEDS_PER_SPOT = 65536                      # each solver spot stands for every choice of the seed's top 16 bits
 SCRAMBLE = 6364136223846793005              # the project's seed scrambler: seed = index * SCRAMBLE (mod 2^64)
 WORLD = (-58594, 58594)                     # hut regions of the +-30M world, as [low, high)
@@ -342,9 +345,9 @@ def accepted_seeds(lines):
 
 # ---- the oracle: the game's own code reads the true hut height ---------------------------------------------------------
 def java_cmd(ymax=128):
-    java = shutil.which("java")
-    if not java:
-        raise HuntError("Java isn't installed")
+    java, major = mcfiles.java_ok()
+    if major < 21:
+        raise HuntError("Java 21 isn't there yet (Get Minecraft files fetches it)")
     if not mcfiles.ready():
         raise HuntError("the Minecraft files aren't downloaded yet")
     need("terrain_dump")
@@ -421,6 +424,14 @@ def record_scan(seed, x, y, z, tag, results_dir=None):
     return line if _append_unique(os.path.join(results_dir, "%d.txt" % -y), "%s %d %d " % (seed, cx, cz), line) else None
 
 
+def record_deep(seed, cx, cz, depth, tag, results_dir=None):
+    """A hut the scanner found sitting on a mineshaft room, deeper than the terrain alone goes (-55 to -59). Same line as the solver's."""
+    results_dir = results_dir or RESULTS
+    os.makedirs(results_dir, exist_ok=True)
+    line = "%s %d %d /tp %d -%d %d scan run=%s inside=/tp %d %d %d" % (seed, cx, cz, 16 * cx, depth, 16 * cz, tag, 16 * cx + 3, 2 - depth, 16 * cz + 7)
+    return line if _append_unique(os.path.join(results_dir, "%d.txt" % depth), "%s %d %d " % (seed, cx, cz), line) else None
+
+
 def all_results(results_dir=None):
     """Every recorded hut, deepest first: [dict(depth, seed, cx, cz, x, y, z, run)] with the /tp position inside the hut."""
     results_dir = results_dir or RESULTS
@@ -437,7 +448,9 @@ def all_results(results_dir=None):
             ins = l.split("inside=/tp")[1].split()
             run = next((w[4:] for w in t if w.startswith("run=")), "")
             out.append(dict(depth=int(fn[:-4]), seed=t[0], cx=int(t[1]), cz=int(t[2]), x=int(ins[0]), y=int(ins[1]), z=int(ins[2]), run=run))
-    out.sort(key=lambda r: (-r["depth"], r["seed"]))
+    for r in out:
+        r["dist"] = int(math.hypot(r["x"], r["z"]))              # blocks from 0,0
+    out.sort(key=lambda r: (-r["depth"], r["dist"], r["seed"]))   # deepest first; at the same depth, the closest to 0,0 first
     return out
 
 
@@ -494,8 +507,7 @@ def preflight_rows(level, mode, cfg=None):
         add(True, "tools built", "")
     if solver:
         java, major = mcfiles.java_ok()
-        add(major >= 21, "Java %d" % major,
-            "Java 21 or newer is needed (%s)" % W.distro_hint("openjdk-21-jre", "java-21-openjdk", "jre21-openjdk", "EclipseAdoptium.Temurin.21.JRE"), "java")
+        add(major >= 21, "Java %d" % major, "Java 21 comes with the Minecraft files download (about 50 MB)", "minecraft")
         add(mcfiles.ready(), "Minecraft files", "the Minecraft files aren't downloaded yet (they come from Mojang, about 90 MB)", "minecraft")
         ds = dataset_of(level)
         add(os.path.isfile(os.path.join(DATA, ds, "layout_catalog.txt")) and os.path.isfile(os.path.join(DATA, ds, "plan.txt")),
@@ -554,6 +566,7 @@ class Run:
 
     def __init__(self, level, mode, seeds="", area=0, **cfg):
         self.level, self.mode, self.seeds_text, self.area = int(level), mode, seeds or "", int(area or 0)
+        self.or_lower = bool(cfg.pop("or_lower", True))
         if mode not in MODES:
             raise HuntError("unknown mode %r" % mode)
         self.cfg = dict(DEFAULTS, **cfg)
@@ -584,7 +597,7 @@ class Run:
             fh.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), text))
 
     def settings(self):
-        return dict(level=self.level, mode=self.mode, seeds=self.seeds_text, area=self.area)
+        return dict(level=self.level, mode=self.mode, seeds=self.seeds_text, area=self.area, or_lower=self.or_lower)
 
     # state
     def pid(self):
@@ -1220,23 +1233,35 @@ class SolveRun(Run):
         return outcome
 
     # what the app shows
+    def matches_per_find(self, funnel):
+        """Matches the solver needs per hut at this level or deeper: this machine's own count once it has a few finds, else the
+        measured figure for -58 and -59 (matches don't depend on the machine; only how fast they come does), else None."""
+        matches = sum(r[2] for r in funnel)
+        finds = sum(1 for l in self.lines("results.txt") if l.split() and int(l.split()[0]) <= self.level)
+        if finds >= SELF_FINDS and matches:
+            return matches / finds
+        return PER_FIND.get(self.level)
+
     def status(self):
         funnel = [list(map(int, l.split())) for l in self.lines("funnel.txt") if l.strip()]
         done = len([l for l in self.lines("done.txt") if l.strip()])
         matches = sum(r[2] for r in funnel)
         times = [int(l) for l in self.lines("chunk_times.txt") if l.strip()]
-        rate = None                                              # matches per second, from the spacing of finished chunks
-        if len(funnel) >= 2 and len(times) >= 2:
-            k = min(len(times) - 1, 8)
-            span = times[-1] - times[-1 - k]
-            rate = sum(r[2] for r in funnel[-k:]) / span if span > 0 else None
-        per_find = PER_FIND.get(self.level)
         live = self.read_live()
         running = self.alive()
+        rate = None                                              # matches per second since this run began, on this machine
+        begun = live.get("started") or self.started
+        n = min(len(funnel), len(times))
+        mine = [i for i in range(n) if times[len(times) - n + i] > begun]           # chunks finished since the run began
+        if len(mine) >= MEASURE_CHUNKS:
+            span = times[-1] - begun                           # wall clock: tuning, hot-GPU pauses and gentle mode all count
+            rate = sum(funnel[len(funnel) - n + i][2] for i in mine) / span if span >= MEASURE_SECONDS else None
+        per_find = self.matches_per_find(funnel)
         return dict(kind=self.kind, running=running, stopping=bool(running and (os.path.exists(self.f("STOP")) or live.get("stopping"))),
                     chunks_done=done, units_done=done, unit="chunk", rate=rate,
                     speed_text=("%s seeds/s" % short_count(rate * SEEDS_PER_SPOT)) if rate else None,
-                    eta_s=(per_find / rate) if (per_find and rate) else None, eta_known=bool(per_find),
+                    eta_s=(per_find / rate) if (per_find and rate) else None, eta_known=bool(per_find), eta_kind="find",
+                    measuring=bool(running and not rate),
                     funnel=[("matches", matches), ("deep enough", sum(r[4] for r in funnel)), ("checked", sum(r[5] for r in funnel)),
                             ("huts", sum(1 for l in self.lines("results.txt") if l.split() and int(l.split()[0]) <= -self.cfg["min_depth"]))],
                     found=self.found(), best=self.lines("results.txt")[:5], problems=self.lines("problems.txt")[-5:],
@@ -1311,7 +1336,16 @@ class ScanRun(Run):
     kind = "scanner"
 
     def make_tag(self):
-        return "scan%d" % -self.level
+        return "scan%d%s" % (-self.level, "" if self.lower() else "x")
+
+    def lower(self):
+        """True when this search means "this deep or deeper". -54 always does: natural terrain stops at -54, so a seed's -55 and
+        lower huts (a mineshaft room carved under the hut) would otherwise be missed or mistaken for something shallower."""
+        return self.or_lower or self.level <= -54
+
+    def ceiling(self):
+        """The y lysh's terrain pass may report. A hut the mineshaft later deepens still shows about -50 to -54 there."""
+        return -50 if self.lower() else self.level
 
     def rect(self):
         """The area as hut regions [rx0, rx1) x [rz0, rz1): the whole world, or a square around 0,0 about `area` blocks out."""
@@ -1353,7 +1387,7 @@ class ScanRun(Run):
                 return None
             z2 = min(rz1, z + step)
             cmd = [tool("lysh"), "scan", "--seed", str(seed), "--rx0", str(rx0), "--rx1", str(rx1), "--rz0", str(z), "--rz1", str(z2),
-                   "--threads", str(self.threads()), "--max-y", "-50", "--phase2-max-y", str(self.level), "--version", self.cfg["version"],
+                   "--threads", str(self.threads()), "--max-y", "-50", "--phase2-max-y", str(self.ceiling()), "--version", self.cfg["version"],
                    "--list", "--no-stats"]
             with tempfile.TemporaryFile("w+", encoding="utf-8") as buf:
                 rc = self.popen(cmd, buf)
@@ -1377,11 +1411,36 @@ class ScanRun(Run):
                 on_slab(k / float(bands))
         return hits, scanned, cand
 
+    def true_depth(self, seed, hits):
+        """[(x, y, z)] with each hut's real depth. lysh sees the terrain only; a hut on a mineshaft room is carved deeper (as low as
+        -59), which finish_row reads from the room itself. Those come back as the chunk corner and a y below -54."""
+        out = []
+        for x, y, z in hits:
+            if self.stopping:
+                break
+            try:
+                line = finish_row(seed, x >> 4, z >> 4, 0, 0, 0, 999, run=self.run_tracked)
+            except HuntError:
+                line = None
+            deep = int(line.split()[0]) if line else None
+            out.append((16 * (x >> 4), deep, 16 * (z >> 4)) if deep is not None and deep < min(y, -54) else (x, y, z))
+        return out
+
+    def keep(self, hits):
+        """Only the huts this search asked for: the level or deeper, or exactly the level."""
+        return [h for h in hits if (h[1] <= self.level if self.lower() else h[1] == self.level)]
+
     def finish_seed(self, pos, seed, hits, scanned, cand, t0, typed):
         """Write down one scanned seed: its huts, its line in scanned.txt, and where to carry on from."""
+        if self.lower() and hits:
+            hits = self.true_depth(seed, hits)
+        hits = self.keep(hits)
         with self.lock:
             for x, y, z in hits:
-                record_scan(seed, x, y, z, self.tag)
+                if y < -54:
+                    record_deep(seed, x >> 4, z >> 4, -y, self.tag)
+                else:
+                    record_scan(seed, x, y, z, self.tag)
                 _append_unique(self.f("results.txt"), "%d 0 %s %d %d " % (y, seed, x >> 4, z >> 4), "%d 0 %s %d %d scan" % (y, seed, x >> 4, z >> 4))
             with open(self.f("scanned.txt"), "a", encoding="utf-8") as fh:
                 fh.write("%d %d %d %d %.1f %d\n" % (seed, scanned, cand, len(hits), time.time() - t0, int(time.time())))
@@ -1396,7 +1455,7 @@ class ScanRun(Run):
         def one(r):
             _, cx, cz = r
             rc, out = self.run_tracked([tool("lysh"), "hut", "--seed", str(seed), "--x", str(16 * cx), "--z", str(16 * cz), "--max-y", "100",
-                                        "--phase2-max-y", str(self.level), "--version", self.cfg["version"]])
+                                        "--phase2-max-y", str(self.ceiling()), "--version", self.cfg["version"]])
             if "ACCEPT" not in next((l for l in out.splitlines() if "verdict" in l), ""):
                 return None
             for l in out.splitlines():
@@ -1512,9 +1571,21 @@ class ScanRun(Run):
             spm = (60.0 * len(recent) / sum(float(r[4]) for r in recent)) if recent and sum(float(r[4]) for r in recent) > 0 else None
         live = self.read_live()
         running = self.alive()
+        begun = live.get("started") or self.started
+        this_run = [r for r in rows if len(r) > 5 and int(r[5]) > begun]
+        sec_per_seed = None                                       # seconds a seed takes here, counted from the start of this run
+        if this_run and running:
+            span = max(float(live.get("now") or time.time()), float(this_run[-1][5])) - begun
+            sec_per_seed = span / len(this_run) if span >= MEASURE_SECONDS or len(this_run) >= MEASURE_CHUNKS else None
+        elif spm:
+            sec_per_seed = 60.0 / spm
+        typed = parse_seeds(self.seeds_text)
+        pos = self.progress().get("pos", 0) if typed else 0
+        left = max(0, len(typed) - pos) if typed else None
+        eta = left * sec_per_seed if (left is not None and sec_per_seed and running) else None
         return dict(kind=self.kind, running=running, stopping=bool(running and (os.path.exists(self.f("STOP")) or live.get("stopping"))),
                     units_done=seeds, unit="seed", rate=spm, speed_text=("%.1f seeds/min" % spm) if spm else None,
-                    sec_per_seed=(60.0 / spm) if spm else None, eta_s=None, eta_known=False,
+                    sec_per_seed=sec_per_seed, eta_s=eta, eta_known=eta is not None, eta_kind="finish", measuring=bool(running and typed and eta is None),
                     funnel=[("regions", regions), ("candidates", cands), ("huts", hits)],
                     found=self.found(), best=self.found()[:5], problems=self.lines("problems.txt")[-5:],
                     failed=(self.lines("FAILED") or [None])[0], live=live, outcome=live.get("phase") if not running else None)
@@ -1532,7 +1603,7 @@ def run_from_tag(tag, **cfg):
     try:
         with open(os.path.join(RUNS, tag, "settings.json"), encoding="utf-8") as f:
             s = json.load(f)
-        return make_run(int(s["level"]), s["mode"], s.get("seeds", ""), s.get("area", 0), **cfg)
+        return make_run(int(s["level"]), s["mode"], s.get("seeds", ""), s.get("area", 0), or_lower=s.get("or_lower", True), **cfg)
     except (OSError, ValueError, KeyError, HuntError):
         return None
 
